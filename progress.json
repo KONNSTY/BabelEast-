@@ -1,0 +1,41 @@
+{
+  "current_milestone": "M02",
+  "completed_milestones": [],
+  "iteration": 1,
+  "max_iterations_per_milestone": 5,
+  "last_commands": ["npx tsc --noEmit", "npm run lint", "npm test"],
+  "last_test_results": {
+    "tsc": "blocked — process ran 14+ min pinned on I/O wait with ~1s CPU time, killed manually; no result produced",
+    "lint": "blocked — ETIMEDOUT reading node_modules/eslint/lib/languages/js/index.js",
+    "test": "blocked — ETIMEDOUT reading a source file via readFileSync",
+    "note": "User is fixing the iCloud sync issue themselves and will signal when to retry. No verification has run since M01 code changes landed — treat everything below as unverified until then."
+  },
+  "changed_files": [
+    "src/app/layout.tsx",
+    "src/app/globals.css",
+    "src/app/page.tsx",
+    "src/app/login/page.tsx",
+    "src/app/icon-192.png/route.tsx",
+    "src/app/icon-512.png/route.tsx",
+    "src/components/ui/Button.tsx",
+    "src/components/Heartbar.tsx",
+    "src/components/StreakBadge.tsx",
+    "src/components/XpBar.tsx",
+    "src/components/MobileNav.tsx",
+    "src/components/states/LoadingState.tsx",
+    "src/components/states/ErrorState.tsx",
+    "src/components/states/EmptyState.tsx",
+    "src/lib/cn.ts",
+    "src/app/api/ai/coach/route.ts",
+    "supabase/migrations/001_production.sql (replaces removed 001_core.sql)",
+    "docs/execution-log.md",
+    "docs/decisions.md",
+    "progress.json"
+  ],
+  "open_blockers": [
+    "ENVIRONMENT: the project directory lives under iCloud Drive (~/Documents/Polymath Productions/...) and the iCloud sync daemon (bird) is under heavy, account-wide load (observed pinned at ~80% CPU syncing unrelated projects too). node_modules contains thousands of small files kept as iCloud placeholders; when tsc/eslint/vitest read many of them quickly, reads fail with ETIMEDOUT or hang indefinitely. `brctl download` was issued on the project dir but did not resolve it within the session. This blocks verification of `npx tsc --noEmit`, `npm run lint`, `npm test`, `npm run build`, and any future Playwright run — needs a decision/action from the user (see chat).",
+    "No .env.local / live Supabase project or OpenRouter key available in this environment — M02/M03 cannot be verified end-to-end against real services until credentials are supplied.",
+    "Playwright is not installed — needs to be added before any Playwright milestone criteria can be met."
+  ],
+  "status": "blocked"
+}

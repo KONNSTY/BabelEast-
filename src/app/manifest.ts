@@ -1,0 +1,2 @@
+import type { MetadataRoute } from "next";
+export default function manifest(): MetadataRoute.Manifest { return { name: "linguaflow", short_name: "linguaflow", description: "Dein smarter Sprachkurs für jeden Tag.", start_url: "/", display: "standalone", background_color: "#f0f8ff", theme_color: "#00a3ff", icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }] }; }

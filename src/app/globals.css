@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f0f8ff;
+  --foreground: #0f172a;
+  --color-canvas: #f0f8ff;
+  --color-brand: #00a3ff;
+  --color-brand-shadow: #0077b6;
+  --color-surface: #ffffff;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-canvas: var(--color-canvas);
+  --color-brand: var(--color-brand);
+  --color-brand-shadow: var(--color-brand-shadow);
+  --color-surface: var(--color-surface);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --font-sans: var(--font-latin), system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--font-latin), system-ui, sans-serif;
+}
+
+/* Script-aware fallback: pages/components rendering CJK or Thai text should
+   set lang on the relevant element so the right font takes over. */
+:lang(th) { font-family: var(--font-thai), var(--font-latin), system-ui, sans-serif; line-height: 1.9; word-break: keep-all; overflow-wrap: break-word; }
+:lang(zh) { font-family: var(--font-zh), var(--font-latin), system-ui, sans-serif; letter-spacing: 0.02em; line-height: 1.8; }
+:lang(ja) { font-family: var(--font-ja), var(--font-latin), system-ui, sans-serif; letter-spacing: 0.02em; line-height: 1.8; }
+:lang(ko) { font-family: var(--font-ko), var(--font-latin), system-ui, sans-serif; letter-spacing: 0.01em; line-height: 1.8; }
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Visible keyboard focus everywhere; never rely on hover alone for interaction. */
+:focus-visible {
+  outline: 3px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
