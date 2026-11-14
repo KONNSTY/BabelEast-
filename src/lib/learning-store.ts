@@ -1,4 +1,154 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-type LearningState = { xp: number; hearts: number; streak: number; lastLessonDate: string | null; answerQuestion: (correct: boolean) => void; finishLesson: (bonus: number) => void; };
-export const useLearningStore = create<LearningState>()(persist((set) => ({ xp: 120, hearts: 5, streak: 4, lastLessonDate: null, answerQuestion: (correct) => set((state) => ({ xp: state.xp + (correct ? 10 : 2), hearts: correct ? state.hearts : Math.max(0, state.hearts - 1) })), finishLesson: (bonus) => set((state) => ({ xp: state.xp + bonus, streak: state.streak + (state.lastLessonDate ? 0 : 1), lastLessonDate: new Date().toISOString().slice(0, 10) })) }), { name: "linguaflow-learning", version: 1 }));
+import {
+  DAILY_GOAL_MINUTES,
+  MAX_HEARTS,
+  MINUTES_PER_PASS,
+  applyStreak,
+  awardAnswer,
+  lessonXp,
+  localDate,
+  regenHearts,
+  scorePercent,
+  hasPassed,
+  type HeartState,
+} from "@/lib/learning-rules";
+
+export type LessonResult = {
+  score: number;
+  passed: boolean;
+  xpEarned: number;
+};
+
+type PersistedLearning = HeartState & {
+  xp: number;
+  streak: number;
+  lastActiveDate: string | null;
+  completedLessonIds: string[];
+  replayRewardedOn: Record<string, string>;
+  minutesToday: number;
+  minutesDate: string | null;
+  coachTurns: number;
+  coachXpDate: string | null;
+};
+
+export type LearningState = PersistedLearning & {
+  hydrated: boolean;
+  syncHearts: (now?: number) => void;
+  answerQuestion: (correct: boolean, now?: number) => boolean;
+  finishLesson: (
+    input: { lessonId: string; correct: number; total: number; xpReward: number },
+    now?: Date,
+  ) => LessonResult;
+  awardCoachXp: (amount: number) => void;
+};
+
+export const initialLearningState: PersistedLearning = {
+  xp: 0,
+  hearts: MAX_HEARTS,
+  lastRegenAt: null,
+  streak: 0,
+  lastActiveDate: null,
+  completedLessonIds: [],
+  replayRewardedOn: {},
+  minutesToday: 0,
+  minutesDate: null,
+  coachTurns: 0,
+  coachXpDate: null,
+};
+
+function persistedFrom(value: unknown): PersistedLearning {
+  if (!value || typeof value !== "object") return initialLearningState;
+  const record = value as Partial<PersistedLearning>;
+  return {
+    xp: typeof record.xp === "number" ? record.xp : 0,
+    hearts: typeof record.hearts === "number" ? record.hearts : MAX_HEARTS,
+    lastRegenAt: typeof record.lastRegenAt === "string" ? record.lastRegenAt : null,
+    streak: typeof record.streak === "number" ? record.streak : 0,
+    lastActiveDate: typeof record.lastActiveDate === "string" ? record.lastActiveDate : null,
+    completedLessonIds: Array.isArray(record.completedLessonIds) ? record.completedLessonIds.filter((id) => typeof id === "string") : [],
+    replayRewardedOn: record.replayRewardedOn && typeof record.replayRewardedOn === "object" ? record.replayRewardedOn : {},
+    minutesToday: typeof record.minutesToday === "number" ? record.minutesToday : 0,
+    minutesDate: typeof record.minutesDate === "string" ? record.minutesDate : null,
+    coachTurns: typeof record.coachTurns === "number" ? record.coachTurns : 0,
+    coachXpDate: typeof record.coachXpDate === "string" ? record.coachXpDate : null,
+  };
+}
+
+export const useLearningStore = create<LearningState>()(
+  persist(
+    (set, get) => ({
+      ...initialLearningState,
+      hydrated: false,
+      syncHearts: (now = Date.now()) => {
+        const next = regenHearts(get(), now);
+        set(next);
+      },
+      answerQuestion: (correct, now = Date.now()) => {
+        const awarded = awardAnswer(correct, get(), now);
+        set({ ...awarded.hearts, xp: get().xp + awarded.xp });
+        return awarded.accepted;
+      },
+      finishLesson: (input, now = new Date()) => {
+        const today = localDate(now);
+        const score = scorePercent(input.correct, input.total);
+        const passed = hasPassed(score);
+        const alreadyCompleted = get().completedLessonIds.includes(input.lessonId);
+        const replay = !alreadyCompleted
+          ? "first"
+          : get().replayRewardedOn[input.lessonId] === today
+            ? "replay-today"
+            : "replay";
+        const xpEarned = lessonXp(input.xpReward, score, replay);
+        const streakUpdate = passed ? applyStreak(get().streak, get().lastActiveDate, today) : null;
+        const minutesToday =
+          (get().minutesDate === today ? get().minutesToday : 0) +
+          (passed && replay !== "replay-today" ? MINUTES_PER_PASS : 0);
+        set({
+          xp: get().xp + xpEarned,
+          streak: streakUpdate?.streak ?? get().streak,
+          lastActiveDate: streakUpdate?.lastActiveDate ?? get().lastActiveDate,
+          completedLessonIds:
+            passed && !alreadyCompleted ? [...get().completedLessonIds, input.lessonId] : get().completedLessonIds,
+          replayRewardedOn: xpEarned > 0 ? { ...get().replayRewardedOn, [input.lessonId]: today } : get().replayRewardedOn,
+          minutesToday,
+          minutesDate: today,
+        });
+        return { score, passed, xpEarned };
+      },
+      awardCoachXp: (amount) => {
+        const xp = Math.max(0, Math.min(20, Math.round(amount)));
+        if (xp === 0) return;
+        const today = localDate(new Date());
+        const turns = get().coachXpDate === today ? get().coachTurns : 0;
+        if (turns >= 5) return;
+        set({ xp: get().xp + xp, coachTurns: turns + 1, coachXpDate: today });
+      },
+    }),
+    {
+      name: "linguaflow-learning",
+      version: 2,
+      skipHydration: true,
+      partialize: (state) => ({
+        xp: state.xp,
+        hearts: state.hearts,
+        lastRegenAt: state.lastRegenAt,
+        streak: state.streak,
+        lastActiveDate: state.lastActiveDate,
+        completedLessonIds: state.completedLessonIds,
+        replayRewardedOn: state.replayRewardedOn,
+        minutesToday: state.minutesToday,
+        minutesDate: state.minutesDate,
+        coachTurns: state.coachTurns,
+        coachXpDate: state.coachXpDate,
+      }),
+      migrate: (persisted, version) => (version < 2 ? initialLearningState : persistedFrom(persisted)),
+    },
+  ),
+);
+
+export function dailyMinutes(state: Pick<LearningState, "minutesToday" | "minutesDate">, today = localDate(new Date())): number {
+  return state.minutesDate === today ? state.minutesToday : 0;
+}
+
+export { DAILY_GOAL_MINUTES };

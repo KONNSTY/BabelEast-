@@ -20,7 +20,7 @@ The repo had an untracked, never-applied `supabase/migrations/001_core.sql` scaf
 
 `courses` (one row per target language) → `units` (CEFR module, e.g. "A1 Unit 3") → `lessons` → `exercises`, plus a `vocabulary` table scoped to a course (optionally a unit). RLS exposes only `is_published = true` courses (cascading through the join chain for units/lessons/exercises/vocabulary), so draft content authored for M04 doesn't leak until it's ready.
 
-**Known trade-off:** `exercises.solution` is readable by any authenticated client once its course is published (same as the original scaffold's `lessons readable using (true)` policy) — the current quiz UI checks answers client-side. This doesn't allow XP/heart/streak cheating (those are only ever granted server-side by `complete_lesson`, which doesn't trust the client's reported correctness beyond the score it's given), it only means a determined user could peek at answers before answering. Revisit if/when exercises move to server-side answer checking.
+`exercises.solution` is not granted to `anon` or `authenticated`. Clients read prompts from `exercises_public` (a `security_invoker` view). `grade_exercise` compares an answer on the server and returns only whether it was correct and how many hearts remain. `complete_lesson` ignores unpublished lessons, records a failed attempt below 60% without XP, and pays replay XP at most once per server day.
 
 ## AI coach route hardening (M03)
 

@@ -10,7 +10,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Für echte Konten die Supabase-Variablen eintragen und `supabase/migrations/001_core.sql` im Supabase SQL Editor ausführen. Der AI-Coach arbeitet ohne Schlüssel mit einer sicheren lokalen Antwort und nutzt mit `OPENROUTER_API_KEY` den konfigurierten Provider.
+Für echte Konten die Supabase-Variablen eintragen und `supabase/migrations/001_production.sql` im Supabase SQL Editor ausführen. Ohne Supabase bleibt der Fortschritt auf diesem Gerät. Der AI-Coach antwortet in der Entwicklung ohne Schlüssel lokal und nutzt mit `OPENROUTER_API_KEY` den konfigurierten Provider. In Produktion braucht der Coach Supabase, damit das Tageslimit gilt.
 
 ## Qualitäts-Gates
 

@@ -21,12 +21,13 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = "primary", size = "md", disabled, ...props },
+  { className, variant = "primary", size = "md", disabled, type = "button", ...props },
   ref,
 ) {
   return (
     <button
       ref={ref}
+      type={type}
       disabled={disabled}
       className={cn(
         "touch-target inline-flex items-center justify-center gap-2 rounded-2xl font-black tracking-tight transition-all duration-100",
