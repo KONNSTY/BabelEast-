@@ -3,12 +3,13 @@ import { cn } from "@/lib/cn";
 type XpBarProps = {
   current: number;
   goal: number;
+  label?: string;
   className?: string;
   trackClassName?: string;
   barClassName?: string;
 };
 
-export function XpBar({ current, goal, className, trackClassName, barClassName }: XpBarProps) {
+export function XpBar({ current, goal, label, className, trackClassName, barClassName }: XpBarProps) {
   const percent = goal > 0 ? Math.max(0, Math.min(100, Math.round((current / goal) * 100))) : 0;
   return (
     <div
@@ -17,7 +18,7 @@ export function XpBar({ current, goal, className, trackClassName, barClassName }
       aria-valuenow={current}
       aria-valuemin={0}
       aria-valuemax={goal}
-      aria-label={`${current} von ${goal} XP`}
+      aria-label={label ?? `${current} von ${goal}`}
     >
       <div
         className={cn("h-full rounded-full bg-brand transition-[width] duration-300", barClassName)}

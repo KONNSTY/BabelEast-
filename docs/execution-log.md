@@ -94,4 +94,13 @@ Per the user's decision: continuing to write code while they resolve the iCloud 
 
 ### Assessment
 
-The spec (`AGENTS.md` user prompt) describes a full production build: 11-language CEFR content (A1–C2), server-validated gamification, an AI coach with quota enforcement, full SEO/locale routing, `llms.txt`, and a Playwright suite. The current state is an early **UI/UX prototype** with a plausible visual design and a working (mocked) AI route, but almost none of the server-side correctness, content, or SEO infrastructure exists yet. This is a multi-milestone body of work, not a single-session task. Proceeding milestone-by-milestone per `progress.json`, starting with M01.
+The spec describes a full production build: 11-language CEFR content (A1–C2), server-validated gamification, an AI coach with quota enforcement, full SEO/locale routing, `llms.txt`, and a Playwright suite. What shipped in the refactor is the trustworthy core of that product: an honest A1 path, tested hearts/XP/streak rules, a hardened coach and migration, and passing lint, typecheck, unit tests, and production build. Eleven-language content, locale SEO, and a Playwright suite are still ahead.
+
+## 2026-11-14 — Refactor to a market-ready core
+
+- Installed `.cursor/skills/refactor/SKILL.md` and followed analyze, refactor, verify, review.
+- Replaced the client-only one-line store with tested rules: hearts floor at zero and regenerate every four hours, wrong answers earn no XP, a lesson passes at 60%, streak counts one local day, same-day replays do not pay again.
+- Split the home screen so the path, lesson, and coach are separate. Removed the fake 38% progress, 6/10 minute goal, and the dead "Nochmal" button.
+- Hardened the coach prompt, auth callback, security headers, and service worker. In production the coach stays closed until Supabase is configured.
+- `001_production.sql` now hides `exercises.solution`, grades on the server, and ignores a client-supplied lesson score.
+- Stopped tracking `node_modules` and `.DS_Store`. Added `.gitignore` and `.env.example`.

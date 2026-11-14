@@ -104,6 +104,16 @@ create table if not exists public.profiles (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.exercise_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  exercise_id uuid not null references public.exercises(id) on delete cascade,
+  lesson_id uuid not null references public.lessons(id) on delete cascade,
+  correct boolean not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists exercise_attempts_user_lesson_idx on public.exercise_attempts(user_id, lesson_id, created_at desc);
+
 -- ---------------------------------------------------------------------------
 -- Progress
 -- ---------------------------------------------------------------------------
@@ -231,7 +241,7 @@ create trigger set_updated_at before update on public.vocabulary for each row ex
 -- ---------------------------------------------------------------------------
 
 create or replace function public.handle_new_user() returns trigger
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 begin
   insert into public.profiles(id, display_name)
     values (new.id, coalesce(new.raw_user_meta_data->>'name', 'Learner'));
@@ -251,7 +261,7 @@ create trigger on_auth_user_created after insert on auth.users for each row exec
 
 create or replace function public.sync_hearts(p_user_id uuid)
 returns table (count smallint, next_regen_at timestamptz)
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_row public.hearts%rowtype;
   v_intervals integer;
@@ -283,7 +293,7 @@ $$;
 
 create or replace function public.spend_heart(p_user_id uuid)
 returns table (count smallint, next_regen_at timestamptz)
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_row public.hearts%rowtype;
 begin
@@ -317,7 +327,7 @@ $$;
 
 create or replace function public.update_streak_on_activity(p_user_id uuid)
 returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_row public.streaks%rowtype;
   v_today date;
@@ -365,7 +375,7 @@ $$;
 
 create or replace function public.earn_gems(p_user_id uuid, p_amount integer, p_reason text)
 returns integer
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_balance integer;
 begin
@@ -385,7 +395,7 @@ $$;
 
 create or replace function public.spend_gems(p_user_id uuid, p_amount integer, p_reason text)
 returns integer
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_balance integer;
 begin
@@ -408,7 +418,7 @@ $$;
 
 create or replace function public.purchase_freeze_shield(p_user_id uuid)
 returns table (gem_balance integer, freeze_shields smallint)
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_cost constant integer := 200;
   v_balance integer;
@@ -426,51 +436,91 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- Lesson completion — the only path that awards XP. Amount is derived
--- server-side from the lesson's own xp_reward, never from client input.
--- Repeat completions pay a reduced amount so XP can't be farmed by replay.
+-- Lesson completion — the only path that awards XP. The score is derived from
+-- grade_exercise attempts, never from the client-supplied p_score. A result
+-- under 60% is recorded as a failed attempt. Replay XP is paid at most once
+-- per server day.
 -- ---------------------------------------------------------------------------
 
 create or replace function public.complete_lesson(p_user_id uuid, p_lesson_id uuid, p_score smallint)
 returns table (xp_earned integer, best_score smallint, first_completion boolean)
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_lesson public.lessons%rowtype;
   v_existing public.user_progress%rowtype;
   v_first boolean;
+  v_passed boolean;
   v_xp integer;
   v_score smallint;
+  v_exercise_count integer;
 begin
   if auth.uid() is distinct from p_user_id then
     raise exception 'not_authorized' using errcode = '28000';
   end if;
 
-  select * into v_lesson from public.lessons where id = p_lesson_id;
+  select * into v_lesson
+  from public.lessons l
+  where l.id = p_lesson_id
+    and exists (
+      select 1
+      from public.units u
+      join public.courses c on c.id = u.course_id
+      where u.id = l.unit_id and c.is_published = true
+    );
   if not found then
     raise exception 'lesson_not_found' using errcode = 'P0002';
   end if;
 
-  v_score := greatest(0, least(100, coalesce(p_score, 0)));
+  -- p_score stays in the signature for callers, but the score comes from attempts.
+  select count(*) into v_exercise_count from public.exercises where lesson_id = p_lesson_id;
+  if v_exercise_count = 0 then
+    raise exception 'lesson_not_found' using errcode = 'P0002';
+  end if;
+  select coalesce(round(100.0 * count(latest.exercise_id) filter (where latest.correct) / v_exercise_count), 0)::smallint
+    into v_score
+  from public.exercises e
+  left join (
+    select distinct on (a.exercise_id) a.exercise_id, a.correct
+    from public.exercise_attempts a
+    where a.user_id = p_user_id and a.lesson_id = p_lesson_id
+    order by a.exercise_id, a.created_at desc
+  ) latest on latest.exercise_id = e.id
+  where e.lesson_id = p_lesson_id;
+  v_passed := v_score >= 60;
 
   select * into v_existing from public.user_progress where user_id = p_user_id and lesson_id = p_lesson_id for update;
-  v_first := not found or not v_existing.completed;
-  v_xp := case when v_first then v_lesson.xp_reward else greatest(1, v_lesson.xp_reward / 4) end;
+  v_first := not found or not coalesce(v_existing.completed, false);
+  if not v_passed then
+    v_xp := 0;
+  elsif v_first then
+    v_xp := v_lesson.xp_reward;
+  elsif v_existing.updated_at::date = current_date then
+    v_xp := 0;
+  else
+    v_xp := greatest(1, v_lesson.xp_reward / 4);
+  end if;
 
   insert into public.user_progress(user_id, lesson_id, completed, best_score, attempts, completed_at, updated_at)
-    values (p_user_id, p_lesson_id, true, v_score, 1, now(), now())
+    values (p_user_id, p_lesson_id, v_passed, v_score, 1, case when v_passed then now() else null end, now())
   on conflict (user_id, lesson_id) do update
-    set completed = true,
+    set completed = public.user_progress.completed or excluded.completed,
         best_score = greatest(public.user_progress.best_score, excluded.best_score),
         attempts = public.user_progress.attempts + 1,
-        completed_at = coalesce(public.user_progress.completed_at, now()),
+        completed_at = coalesce(public.user_progress.completed_at, excluded.completed_at),
         updated_at = now();
 
-  insert into public.xp_transactions(user_id, amount, lesson_id, reason)
-    values (p_user_id, v_xp, p_lesson_id, case when v_lesson.lesson_type = 'boss_fight' then 'boss_fight' else 'lesson_complete' end);
+  if v_xp > 0 then
+    insert into public.xp_transactions(user_id, amount, lesson_id, reason)
+      values (p_user_id, v_xp, p_lesson_id, case when v_lesson.lesson_type = 'boss_fight' then 'boss_fight' else 'lesson_complete' end);
+    perform public.record_quest_event(p_user_id, 'xp_earned', v_xp);
+  end if;
 
-  perform public.update_streak_on_activity(p_user_id);
-  perform public.record_quest_event(p_user_id, 'lessons_completed', 1);
-  perform public.record_quest_event(p_user_id, 'xp_earned', v_xp);
+  if v_passed then
+    perform public.update_streak_on_activity(p_user_id);
+  end if;
+  if v_passed and v_first then
+    perform public.record_quest_event(p_user_id, 'lessons_completed', 1);
+  end if;
 
   select coalesce(max(best_score), v_score) into v_score from public.user_progress where user_id = p_user_id and lesson_id = p_lesson_id;
   return query select v_xp, v_score, v_first;
@@ -484,7 +534,7 @@ $$;
 
 create or replace function public.check_and_increment_ai_quota(p_user_id uuid)
 returns table (allowed boolean, prompts_used smallint, quota_date date)
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_used smallint;
 begin
@@ -518,7 +568,7 @@ $$;
 
 create or replace function public.ensure_daily_quests(p_user_id uuid)
 returns setof public.user_quests
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 begin
   if auth.uid() is distinct from p_user_id then
     raise exception 'not_authorized' using errcode = '28000';
@@ -542,7 +592,7 @@ $$;
 
 create or replace function public.record_quest_event(p_user_id uuid, p_goal_type text, p_amount integer)
 returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare
   v_quest record;
 begin
@@ -583,6 +633,7 @@ alter table public.courses enable row level security;
 alter table public.units enable row level security;
 alter table public.lessons enable row level security;
 alter table public.exercises enable row level security;
+alter table public.exercise_attempts enable row level security;
 alter table public.vocabulary enable row level security;
 alter table public.profiles enable row level security;
 alter table public.user_progress enable row level security;
@@ -641,6 +692,11 @@ create policy "profiles own rows" on public.profiles for all using (auth.uid() =
 -- row. All writes happen exclusively through the SECURITY DEFINER functions
 -- above, which run with elevated privilege and therefore bypass this policy
 -- by design — the client has no INSERT/UPDATE/DELETE grant on these tables.
+drop policy if exists "exercise_attempts readable" on public.exercise_attempts;
+create policy "exercise_attempts readable" on public.exercise_attempts for select using (auth.uid() = user_id);
+revoke all on table public.exercise_attempts from public, anon, authenticated;
+grant select on public.exercise_attempts to authenticated;
+
 drop policy if exists "user_progress readable" on public.user_progress;
 create policy "user_progress readable" on public.user_progress for select using (auth.uid() = user_id);
 
@@ -666,6 +722,67 @@ drop policy if exists "user_quests readable" on public.user_quests;
 create policy "user_quests readable" on public.user_quests for select using (auth.uid() = user_id);
 
 -- ---------------------------------------------------------------------------
+-- Answer keys stay on exercises.solution. Clients may read prompts through
+-- exercises_public, never the solution column. grade_exercise compares the
+-- answer and returns only correct/hearts.
+-- ---------------------------------------------------------------------------
+
+create or replace view public.exercises_public
+with (security_invoker = true) as
+  select id, lesson_id, order_index, exercise_type, prompt, explanation
+  from public.exercises;
+
+revoke all on table public.exercises from public, anon, authenticated;
+grant select (id, lesson_id, order_index, exercise_type, prompt, explanation) on public.exercises to anon, authenticated;
+revoke all on public.exercises_public from public, anon, authenticated;
+grant select on public.exercises_public to anon, authenticated;
+
+create or replace function public.grade_exercise(p_user_id uuid, p_exercise_id uuid, p_answer text)
+returns table (correct boolean, hearts smallint)
+language plpgsql security definer set search_path = pg_catalog, public as $$
+declare
+  v_solution jsonb;
+  v_expected text;
+  v_correct boolean;
+  v_hearts smallint;
+  v_lesson_id uuid;
+begin
+  if auth.uid() is distinct from p_user_id then
+    raise exception 'not_authorized' using errcode = '28000';
+  end if;
+
+  select e.solution, e.lesson_id into v_solution, v_lesson_id
+  from public.exercises e
+  join public.lessons l on l.id = e.lesson_id
+  join public.units u on u.id = l.unit_id
+  join public.courses c on c.id = u.course_id
+  where e.id = p_exercise_id and c.is_published = true;
+  if not found then
+    raise exception 'lesson_not_found' using errcode = 'P0002';
+  end if;
+
+  select synced.count into v_hearts from public.sync_hearts(p_user_id) as synced;
+  if coalesce(v_hearts, 0) <= 0 then
+    raise exception 'no_hearts_left' using errcode = 'P0001';
+  end if;
+
+  v_expected := case jsonb_typeof(v_solution)
+    when 'string' then v_solution #>> '{}'
+    else coalesce(v_solution->>'answer', '')
+  end;
+  v_correct := lower(btrim(coalesce(p_answer, ''))) = lower(btrim(v_expected));
+
+  if not v_correct then
+    select spent.count into v_hearts from public.spend_heart(p_user_id) as spent;
+  end if;
+  insert into public.exercise_attempts(user_id, exercise_id, lesson_id, correct)
+    values (p_user_id, p_exercise_id, v_lesson_id, v_correct);
+
+  return query select v_correct, coalesce(v_hearts, 0)::smallint;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Function grants: only the top-level, auth-checked action functions are
 -- reachable from the client. Internal helpers (update_streak_on_activity,
 -- earn_gems, record_quest_event) are intentionally NOT granted to
@@ -673,12 +790,20 @@ create policy "user_quests readable" on public.user_quests for select using (aut
 -- below, so a client cannot call them directly to fabricate progress.
 -- ---------------------------------------------------------------------------
 
-revoke execute on function public.set_updated_at() from public;
-revoke execute on function public.handle_new_user() from public;
-revoke execute on function public.update_streak_on_activity(uuid) from public;
-revoke execute on function public.earn_gems(uuid, integer, text) from public;
-revoke execute on function public.record_quest_event(uuid, text, integer) from public;
-revoke execute on function public.spend_gems(uuid, integer, text) from public;
+revoke all on function public.set_updated_at() from public, anon, authenticated;
+revoke all on function public.handle_new_user() from public, anon, authenticated;
+revoke all on function public.update_streak_on_activity(uuid) from public, anon, authenticated;
+revoke all on function public.earn_gems(uuid, integer, text) from public, anon, authenticated;
+revoke all on function public.record_quest_event(uuid, text, integer) from public, anon, authenticated;
+revoke all on function public.spend_gems(uuid, integer, text) from public, anon, authenticated;
+
+revoke all on function public.sync_hearts(uuid) from public, anon, authenticated;
+revoke all on function public.spend_heart(uuid) from public, anon, authenticated;
+revoke all on function public.complete_lesson(uuid, uuid, smallint) from public, anon, authenticated;
+revoke all on function public.check_and_increment_ai_quota(uuid) from public, anon, authenticated;
+revoke all on function public.purchase_freeze_shield(uuid) from public, anon, authenticated;
+revoke all on function public.ensure_daily_quests(uuid) from public, anon, authenticated;
+revoke all on function public.grade_exercise(uuid, uuid, text) from public, anon, authenticated;
 
 grant execute on function public.sync_hearts(uuid) to authenticated;
 grant execute on function public.spend_heart(uuid) to authenticated;
@@ -686,6 +811,7 @@ grant execute on function public.complete_lesson(uuid, uuid, smallint) to authen
 grant execute on function public.check_and_increment_ai_quota(uuid) to authenticated;
 grant execute on function public.purchase_freeze_shield(uuid) to authenticated;
 grant execute on function public.ensure_daily_quests(uuid) to authenticated;
+grant execute on function public.grade_exercise(uuid, uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Seed: languages (content + gamification catalog is seeded separately once
