@@ -128,6 +128,11 @@ export function lessonStatuses(completedIds: readonly string[]): Record<string, 
   );
 }
 
+export function canStartLesson(completedIds: readonly string[], lessonId: string): boolean {
+  const status = lessonStatuses(completedIds)[lessonId];
+  return status === "current" || status === "done";
+}
+
 export function courseProgress(completedIds: readonly string[]): number {
   if (lessons.length === 0) return 0;
   const completed = lessons.filter((lesson) => completedIds.includes(lesson.id)).length;

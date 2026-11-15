@@ -10,7 +10,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Für echte Konten die Supabase-Variablen eintragen und `supabase/migrations/001_production.sql` im Supabase SQL Editor ausführen. Ohne Supabase bleibt der Fortschritt auf diesem Gerät. Der AI-Coach antwortet in der Entwicklung ohne Schlüssel lokal und nutzt mit `OPENROUTER_API_KEY` den konfigurierten Provider. In Produktion braucht der Coach Supabase, damit das Tageslimit gilt.
+Für echte Konten die Supabase-Variablen eintragen und die Dateien in `supabase/migrations` der Reihe nach im Supabase SQL Editor ausführen. `NEXT_PUBLIC_APP_URL` muss in Produktion die öffentliche https-Origin sein. Ohne Supabase bleibt der Fortschritt auf diesem Gerät. Der AI-Coach antwortet in der Entwicklung ohne Schlüssel lokal und nutzt mit `OPENROUTER_API_KEY` den konfigurierten Provider. In Produktion braucht der Coach Supabase, damit das Tageslimit gilt.
 
 ## Qualitäts-Gates
 

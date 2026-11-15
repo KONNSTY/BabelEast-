@@ -42,23 +42,36 @@ export function hasPassed(score: number): boolean {
   return score >= PASSING_SCORE;
 }
 
+function safeReward(reward: number): number {
+  if (!Number.isFinite(reward)) return 0;
+  return Math.max(0, Math.min(200, Math.floor(reward)));
+}
+
 export function lessonXp(reward: number, score: number, replay: "first" | "replay" | "replay-today"): number {
+  const bounded = safeReward(reward);
   if (!hasPassed(score)) return 0;
-  if (replay === "first") return reward;
+  if (replay === "first") return bounded;
   if (replay === "replay-today") return 0;
-  return Math.max(1, Math.floor(reward / 4));
+  return Math.max(1, Math.floor(bounded / 4));
+}
+
+function boundedHearts(hearts: number): number {
+  if (!Number.isFinite(hearts)) return MAX_HEARTS;
+  return Math.max(0, Math.min(MAX_HEARTS, Math.floor(hearts)));
 }
 
 export function regenHearts(state: HeartState, now: number): HeartState {
-  if (state.hearts >= MAX_HEARTS || !state.lastRegenAt) {
-    return { hearts: Math.min(MAX_HEARTS, state.hearts), lastRegenAt: state.hearts >= MAX_HEARTS ? null : state.lastRegenAt };
+  const hearts = boundedHearts(state.hearts);
+  if (!Number.isFinite(now) || hearts >= MAX_HEARTS || !state.lastRegenAt) {
+    return { hearts, lastRegenAt: hearts >= MAX_HEARTS ? null : state.lastRegenAt };
   }
-  const elapsed = now - Date.parse(state.lastRegenAt);
-  const intervals = Math.floor(elapsed / HEART_REGEN_MS);
-  if (intervals <= 0) return state;
-  const hearts = Math.min(MAX_HEARTS, state.hearts + intervals);
-  if (hearts >= MAX_HEARTS) return { hearts, lastRegenAt: null };
-  return { hearts, lastRegenAt: new Date(Date.parse(state.lastRegenAt) + intervals * HEART_REGEN_MS).toISOString() };
+  const started = Date.parse(state.lastRegenAt);
+  if (!Number.isFinite(started) || started > now) return { hearts, lastRegenAt: state.lastRegenAt };
+  const intervals = Math.floor((now - started) / HEART_REGEN_MS);
+  if (intervals <= 0) return { hearts, lastRegenAt: state.lastRegenAt };
+  const restored = Math.min(MAX_HEARTS, hearts + intervals);
+  if (restored >= MAX_HEARTS) return { hearts: restored, lastRegenAt: null };
+  return { hearts: restored, lastRegenAt: new Date(started + intervals * HEART_REGEN_MS).toISOString() };
 }
 
 export function spendHeart(state: HeartState, now: number): HeartState & { spent: boolean } {

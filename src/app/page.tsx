@@ -10,11 +10,12 @@ import { LessonSession } from "@/components/lesson/LessonSession";
 import { EmptyState } from "@/components/states/EmptyState";
 import { LoadingState } from "@/components/states/LoadingState";
 import { Button } from "@/components/ui/Button";
-import { lessonById } from "@/lib/course";
+import { canStartLesson, lessonById } from "@/lib/course";
 import { useLearningStore } from "@/lib/learning-store";
 
 export default function Home() {
   const hydrated = useLearningStore((state) => state.hydrated);
+  const completedLessonIds = useLearningStore((state) => state.completedLessonIds);
   const xp = useLearningStore((state) => state.xp);
   const hearts = useLearningStore((state) => state.hearts);
   const streak = useLearningStore((state) => state.streak);
@@ -37,7 +38,7 @@ export default function Home() {
     );
   }
 
-  if (activeLesson) {
+  if (activeLesson && canStartLesson(completedLessonIds, activeLesson)) {
     const lesson = lessonById(activeLesson);
     return (
       <>

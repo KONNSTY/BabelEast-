@@ -8,11 +8,12 @@ export type SyncEvent = {
 };
 
 const KEY = "linguaflow-sync-queue";
+const MAX_QUEUE = 50;
 
 export async function queueSyncEvent(event: Omit<SyncEvent, "id" | "createdAt">): Promise<void> {
   const queue = (await get<SyncEvent[]>(KEY)) ?? [];
   queue.push({ ...event, id: crypto.randomUUID(), createdAt: new Date().toISOString() });
-  await set(KEY, queue);
+  await set(KEY, queue.slice(-MAX_QUEUE));
 }
 
 export async function flushSyncQueue(send: (event: SyncEvent) => Promise<void>): Promise<{ sent: number; pending: number }> {

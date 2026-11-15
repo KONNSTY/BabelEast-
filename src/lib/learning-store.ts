@@ -57,20 +57,31 @@ export const initialLearningState: PersistedLearning = {
   coachXpDate: null,
 };
 
+function finiteNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
 function persistedFrom(value: unknown): PersistedLearning {
   if (!value || typeof value !== "object") return initialLearningState;
   const record = value as Partial<PersistedLearning>;
+  const replayRewardedOn: Record<string, string> = {};
+  if (record.replayRewardedOn && typeof record.replayRewardedOn === "object") {
+    for (const [lessonId, day] of Object.entries(record.replayRewardedOn)) {
+      if (typeof day === "string") replayRewardedOn[lessonId] = day;
+    }
+  }
   return {
-    xp: typeof record.xp === "number" ? record.xp : 0,
-    hearts: typeof record.hearts === "number" ? record.hearts : MAX_HEARTS,
+    xp: finiteNumber(record.xp, 0, 0, Number.MAX_SAFE_INTEGER),
+    hearts: finiteNumber(record.hearts, MAX_HEARTS, 0, MAX_HEARTS),
     lastRegenAt: typeof record.lastRegenAt === "string" ? record.lastRegenAt : null,
-    streak: typeof record.streak === "number" ? record.streak : 0,
+    streak: finiteNumber(record.streak, 0, 0, 10_000),
     lastActiveDate: typeof record.lastActiveDate === "string" ? record.lastActiveDate : null,
     completedLessonIds: Array.isArray(record.completedLessonIds) ? record.completedLessonIds.filter((id) => typeof id === "string") : [],
-    replayRewardedOn: record.replayRewardedOn && typeof record.replayRewardedOn === "object" ? record.replayRewardedOn : {},
-    minutesToday: typeof record.minutesToday === "number" ? record.minutesToday : 0,
+    replayRewardedOn,
+    minutesToday: finiteNumber(record.minutesToday, 0, 0, 24 * 60),
     minutesDate: typeof record.minutesDate === "string" ? record.minutesDate : null,
-    coachTurns: typeof record.coachTurns === "number" ? record.coachTurns : 0,
+    coachTurns: finiteNumber(record.coachTurns, 0, 0, 5),
     coachXpDate: typeof record.coachXpDate === "string" ? record.coachXpDate : null,
   };
 }
@@ -117,6 +128,7 @@ export const useLearningStore = create<LearningState>()(
         return { score, passed, xpEarned };
       },
       awardCoachXp: (amount) => {
+        if (typeof amount !== "number" || !Number.isFinite(amount)) return;
         const xp = Math.max(0, Math.min(20, Math.round(amount)));
         if (xp === 0) return;
         const today = localDate(new Date());

@@ -1,64 +1,60 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
-import { coachMessages, offlineCoachReply, withServerXp } from "@/lib/coach";
+import { coachMessages, coachMode, coachModelSchema, offlineCoachReply, readCoachRequest, withServerXp } from "@/lib/coach";
+import { publicReferer } from "@/lib/http";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
-const requestSchema = z.object({
-  message: z.string().trim().min(1).max(1200),
-  targetLanguage: z.string().regex(/^[a-z]{2}$/).default("de"),
-  context: z.string().max(2000).optional(),
-});
-
-const modelSchema = z.object({
-  correction: z.string().nullable(),
-  explanation: z.string(),
-  reply: z.string(),
-  suggested_replies: z.array(z.string()).max(4),
-});
-
 const UPSTREAM_TIMEOUT_MS = 15_000;
+const NO_STORE = { "Cache-Control": "no-store" };
 
 function supabaseConfigured(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }
 
+function json(body: unknown, status = 200, extraHeaders?: Record<string, string>) {
+  return NextResponse.json(body, { status, headers: { ...NO_STORE, ...extraHeaders } });
+}
+
+async function releaseCoachQuota(userId: string) {
+  try {
+    const admin = createAdminClient();
+    if (!admin) return;
+    await admin.rpc("refund_ai_quota", { p_user_id: userId });
+  } catch {
+    // A missed refund must not replace the upstream error the learner sees.
+  }
+}
+
 export async function POST(request: Request) {
   try {
-    const parsed = requestSchema.safeParse(await request.json());
-    if (!parsed.success) {
-      return NextResponse.json({ error: "Ungültige Eingabe." }, { status: 400 });
-    }
-    const { message, targetLanguage, context } = parsed.data;
+    const read = await readCoachRequest(request);
+    if (!read.ok) return json({ error: read.error }, read.status);
+    const { message, targetLanguage, context } = read.data;
 
-    if (!supabaseConfigured()) {
-      if (process.env.NODE_ENV === "production") {
-        return NextResponse.json({ error: "Coach ist nicht konfiguriert." }, { status: 503 });
-      }
-      return NextResponse.json(offlineCoachReply(message), { headers: { "X-Coach-Mode": "offline-fallback" } });
+    const mode = coachMode({ supabaseConfigured: supabaseConfigured(), nodeEnv: process.env.NODE_ENV });
+    if (mode === "unavailable") return json({ error: "Coach ist nicht konfiguriert." }, 503);
+    if (mode === "offline") {
+      return json(offlineCoachReply(message), 200, { "X-Coach-Mode": "offline-fallback" });
     }
 
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Bitte melde dich an, um den Coach zu nutzen." }, { status: 401 });
-    }
+    if (!user) return json({ error: "Bitte melde dich an, um den Coach zu nutzen." }, 401);
 
     const { data: quotaRows, error: quotaError } = await supabase.rpc("check_and_increment_ai_quota", {
       p_user_id: user.id,
     });
-    if (quotaError) {
-      return NextResponse.json({ error: "Quota-Prüfung fehlgeschlagen." }, { status: 500 });
-    }
+    if (quotaError) return json({ error: "Quota-Prüfung fehlgeschlagen." }, 500);
     const quota = Array.isArray(quotaRows) ? quotaRows[0] : quotaRows;
     if (!quota?.allowed) {
-      return NextResponse.json({ error: "Tageslimit für den KI-Coach erreicht. Versuche es morgen wieder." }, { status: 429 });
+      return json({ error: "Tageslimit für den KI-Coach erreicht. Versuche es morgen wieder." }, 429);
     }
 
     const key = process.env.OPENROUTER_API_KEY;
     if (!key || key === "mock_key") {
-      return NextResponse.json(offlineCoachReply(message), { headers: { "X-Coach-Mode": "offline-fallback" } });
+      return json(offlineCoachReply(message), 200, { "X-Coach-Mode": "offline-fallback" });
     }
 
     const controller = new AbortController();
@@ -71,7 +67,7 @@ export async function POST(request: Request) {
         headers: {
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+          "HTTP-Referer": publicReferer(process.env.NEXT_PUBLIC_APP_URL),
           "X-Title": "linguaflow",
         },
         body: JSON.stringify({
@@ -83,16 +79,18 @@ export async function POST(request: Request) {
         }),
       });
     } catch (error) {
+      await releaseCoachQuota(user.id);
       if (error instanceof Error && error.name === "AbortError") {
-        return NextResponse.json({ error: "Der Coach antwortet gerade nicht rechtzeitig." }, { status: 504 });
+        return json({ error: "Der Coach antwortet gerade nicht rechtzeitig." }, 504);
       }
-      return NextResponse.json({ error: "Der Coach ist kurz nicht erreichbar." }, { status: 502 });
+      return json({ error: "Der Coach ist kurz nicht erreichbar." }, 502);
     } finally {
       clearTimeout(timeout);
     }
 
     if (!upstream.ok) {
-      return NextResponse.json({ error: "Der Coach ist kurz nicht erreichbar." }, { status: 502 });
+      await releaseCoachQuota(user.id);
+      return json({ error: "Der Coach ist kurz nicht erreichbar." }, 502);
     }
 
     const payload = (await upstream.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
@@ -101,14 +99,12 @@ export async function POST(request: Request) {
     try {
       parsedContent = typeof content === "string" ? JSON.parse(content.slice(0, 8000)) : content;
     } catch {
-      return NextResponse.json({ error: "Ungültige Coach-Antwort." }, { status: 502 });
+      return json({ error: "Ungültige Coach-Antwort." }, 502);
     }
-    const result = modelSchema.safeParse(parsedContent);
-    if (!result.success) {
-      return NextResponse.json({ error: "Ungültige Coach-Antwort." }, { status: 502 });
-    }
-    return NextResponse.json(withServerXp(result.data));
+    const result = coachModelSchema.safeParse(parsedContent);
+    if (!result.success) return json({ error: "Ungültige Coach-Antwort." }, 502);
+    return json(withServerXp(result.data));
   } catch {
-    return NextResponse.json({ error: "Coach-Anfrage fehlgeschlagen." }, { status: 500 });
+    return json({ error: "Coach-Anfrage fehlgeschlagen." }, 500);
   }
 }

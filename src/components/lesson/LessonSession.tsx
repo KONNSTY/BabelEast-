@@ -38,6 +38,7 @@ export function LessonSession({
   const [result, setResult] = useState<LessonResult | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const timer = useRef<number | null>(null);
+  const answering = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -64,10 +65,14 @@ export function LessonSession({
   const regenAt = nextHeartAt({ hearts, lastRegenAt });
 
   const chooseAnswer = (option: string) => {
-    if (selected || hearts <= 0) return;
+    if (answering.current || selected || hearts <= 0) return;
+    answering.current = true;
     const correct = option === question.answer;
     const accepted = answerQuestion(correct);
-    if (!accepted) return;
+    if (!accepted) {
+      answering.current = false;
+      return;
+    }
     setSelected(option);
     const nextCorrect = correctCount + (correct ? 1 : 0);
     if (correct) setCorrectCount(nextCorrect);
@@ -85,6 +90,7 @@ export function LessonSession({
           payload: { lessonId: lesson.id, score: lessonResult.score, passed: lessonResult.passed },
         }).catch(() => undefined);
       } else {
+        answering.current = false;
         setIndex((value) => value + 1);
         setSelected(null);
       }

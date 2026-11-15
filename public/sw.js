@@ -1,4 +1,4 @@
-const CACHE = "linguaflow-v2";
+const CACHE = "linguaflow-v3";
 const PRECACHE = ["/", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -20,7 +20,12 @@ self.addEventListener("activate", (event) => {
 });
 
 function isCacheable(request, response) {
-  return response && response.ok && response.type === "basic" && new URL(request.url).origin === self.location.origin;
+  if (!response || !response.ok || response.type !== "basic") return false;
+  if (new URL(request.url).origin !== self.location.origin) return false;
+  if (response.headers.has("set-cookie")) return false;
+  const cacheControl = response.headers.get("cache-control") || "";
+  if (/no-store|private/i.test(cacheControl)) return false;
+  return true;
 }
 
 self.addEventListener("fetch", (event) => {
@@ -48,13 +53,15 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
-      return fetch(request).then((response) => {
-        if (isCacheable(request, response)) {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      });
+      return fetch(request)
+        .then((response) => {
+          if (isCacheable(request, response)) {
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request));
     }),
   );
 });

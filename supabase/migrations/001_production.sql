@@ -217,6 +217,7 @@ create index if not exists user_quests_user_date_idx on public.user_quests(user_
 
 create or replace function public.set_updated_at() returns trigger
 language plpgsql as $$
+#variable_conflict use_column
 begin
   new.updated_at = now();
   return new;
@@ -242,9 +243,16 @@ create trigger set_updated_at before update on public.vocabulary for each row ex
 
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
+declare
+  v_name text;
 begin
+  v_name := btrim(coalesce(new.raw_user_meta_data->>'name', ''));
+  if v_name = '' then
+    v_name := 'Learner';
+  end if;
   insert into public.profiles(id, display_name)
-    values (new.id, coalesce(new.raw_user_meta_data->>'name', 'Learner'));
+    values (new.id, left(v_name, 80));
   insert into public.hearts(user_id) values (new.id);
   insert into public.streaks(user_id) values (new.id);
   insert into public.gems(user_id) values (new.id);
@@ -262,6 +270,7 @@ create trigger on_auth_user_created after insert on auth.users for each row exec
 create or replace function public.sync_hearts(p_user_id uuid)
 returns table (count smallint, next_regen_at timestamptz)
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_row public.hearts%rowtype;
   v_intervals integer;
@@ -278,11 +287,11 @@ begin
   if v_row.count < 5 then
     v_intervals := floor(extract(epoch from (now() - v_row.last_regen_at)) / (4 * 3600))::integer;
     if v_intervals > 0 then
-      update public.hearts
-        set count = least(5, count + v_intervals),
-            last_regen_at = last_regen_at + (v_intervals * interval '4 hours'),
+      update public.hearts as hearts
+        set count = least(5, hearts.count + v_intervals),
+            last_regen_at = hearts.last_regen_at + (v_intervals * interval '4 hours'),
             updated_at = now()
-        where user_id = p_user_id
+        where hearts.user_id = p_user_id
         returning * into v_row;
     end if;
   end if;
@@ -294,6 +303,7 @@ $$;
 create or replace function public.spend_heart(p_user_id uuid)
 returns table (count smallint, next_regen_at timestamptz)
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_row public.hearts%rowtype;
 begin
@@ -309,11 +319,11 @@ begin
     raise exception 'no_hearts_left' using errcode = 'P0001';
   end if;
 
-  update public.hearts
-    set count = count - 1,
-        last_regen_at = case when count = 5 then now() else last_regen_at end,
+  update public.hearts as hearts
+    set count = hearts.count - 1,
+        last_regen_at = case when hearts.count = 5 then now() else hearts.last_regen_at end,
         updated_at = now()
-    where user_id = p_user_id
+    where hearts.user_id = p_user_id
     returning * into v_row;
 
   return query select v_row.count, v_row.last_regen_at + interval '4 hours';
@@ -328,10 +338,15 @@ $$;
 create or replace function public.update_streak_on_activity(p_user_id uuid)
 returns void
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_row public.streaks%rowtype;
   v_today date;
 begin
+  if auth.uid() is distinct from p_user_id then
+    raise exception 'not_authorized' using errcode = '28000';
+  end if;
+
   select * into v_row from public.streaks where user_id = p_user_id for update;
   if not found then
     insert into public.streaks(user_id, current_streak, longest_streak, last_active_date)
@@ -376,9 +391,13 @@ $$;
 create or replace function public.earn_gems(p_user_id uuid, p_amount integer, p_reason text)
 returns integer
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_balance integer;
 begin
+  if auth.uid() is distinct from p_user_id then
+    raise exception 'not_authorized' using errcode = '28000';
+  end if;
   if p_amount <= 0 then
     raise exception 'invalid_amount' using errcode = 'P0001';
   end if;
@@ -396,6 +415,7 @@ $$;
 create or replace function public.spend_gems(p_user_id uuid, p_amount integer, p_reason text)
 returns integer
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_balance integer;
 begin
@@ -419,6 +439,7 @@ $$;
 create or replace function public.purchase_freeze_shield(p_user_id uuid)
 returns table (gem_balance integer, freeze_shields smallint)
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_cost constant integer := 200;
   v_balance integer;
@@ -428,9 +449,14 @@ begin
     raise exception 'not_authorized' using errcode = '28000';
   end if;
   v_balance := public.spend_gems(p_user_id, v_cost, 'streak_freeze_purchase');
-  update public.streaks set freeze_shields = freeze_shields + 1, updated_at = now()
-    where user_id = p_user_id
+  update public.streaks as streaks
+    set freeze_shields = streaks.freeze_shields + 1, updated_at = now()
+    where streaks.user_id = p_user_id
     returning streaks.freeze_shields into v_shields;
+  if not found then
+    insert into public.streaks(user_id, freeze_shields) values (p_user_id, 1)
+      returning freeze_shields into v_shields;
+  end if;
   return query select v_balance, v_shields;
 end;
 $$;
@@ -445,6 +471,7 @@ $$;
 create or replace function public.complete_lesson(p_user_id uuid, p_lesson_id uuid, p_score smallint)
 returns table (xp_earned integer, best_score smallint, first_completion boolean)
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_lesson public.lessons%rowtype;
   v_existing public.user_progress%rowtype;
@@ -457,6 +484,7 @@ begin
   if auth.uid() is distinct from p_user_id then
     raise exception 'not_authorized' using errcode = '28000';
   end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_user_id::text || ':' || p_lesson_id::text, 0));
 
   select * into v_lesson
   from public.lessons l
@@ -494,7 +522,13 @@ begin
     v_xp := 0;
   elsif v_first then
     v_xp := v_lesson.xp_reward;
-  elsif v_existing.updated_at::date = current_date then
+  elsif exists (
+    select 1 from public.xp_transactions
+    where user_id = p_user_id
+      and lesson_id = p_lesson_id
+      and reason in ('lesson_complete', 'boss_fight')
+      and created_at >= date_trunc('day', now())
+  ) then
     v_xp := 0;
   else
     v_xp := greatest(1, v_lesson.xp_reward / 4);
@@ -522,8 +556,10 @@ begin
     perform public.record_quest_event(p_user_id, 'lessons_completed', 1);
   end if;
 
-  select coalesce(max(best_score), v_score) into v_score from public.user_progress where user_id = p_user_id and lesson_id = p_lesson_id;
-  return query select v_xp, v_score, v_first;
+  select coalesce(max(user_progress.best_score), v_score) into v_score
+  from public.user_progress
+  where user_progress.user_id = p_user_id and user_progress.lesson_id = p_lesson_id;
+  return query select v_xp, v_score, (v_passed and v_first);
 end;
 $$;
 
@@ -535,6 +571,7 @@ $$;
 create or replace function public.check_and_increment_ai_quota(p_user_id uuid)
 returns table (allowed boolean, prompts_used smallint, quota_date date)
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_used smallint;
 begin
@@ -546,10 +583,10 @@ begin
     values (p_user_id, current_date, 0)
     on conflict (user_id, usage_date) do nothing;
 
-  update public.ai_usage
-    set prompts_used = prompts_used + 1
-    where user_id = p_user_id and usage_date = current_date and prompts_used < 5
-    returning public.ai_usage.prompts_used into v_used;
+  update public.ai_usage as usage
+    set prompts_used = usage.prompts_used + 1
+    where usage.user_id = p_user_id and usage.usage_date = current_date and usage.prompts_used < 5
+    returning usage.prompts_used into v_used;
 
   if v_used is null then
     select ai_usage.prompts_used into v_used from public.ai_usage where user_id = p_user_id and usage_date = current_date;
@@ -569,22 +606,30 @@ $$;
 create or replace function public.ensure_daily_quests(p_user_id uuid)
 returns setof public.user_quests
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
+declare
+  v_open integer;
 begin
   if auth.uid() is distinct from p_user_id then
     raise exception 'not_authorized' using errcode = '28000';
   end if;
+  perform pg_advisory_xact_lock(hashtextextended('daily-quests:' || p_user_id::text, 0));
 
-  insert into public.user_quests(user_id, quest_id, assigned_date)
-  select p_user_id, q.id, current_date
-  from public.quests q
-  where q.is_active = true
-    and not exists (
-      select 1 from public.user_quests uq
-      where uq.user_id = p_user_id and uq.quest_id = q.id and uq.assigned_date = current_date
-    )
-  order by random()
-  limit 3
-  on conflict (user_id, quest_id, assigned_date) do nothing;
+  select count(*) into v_open from public.user_quests
+  where user_id = p_user_id and assigned_date = current_date;
+  if v_open < 3 then
+    insert into public.user_quests(user_id, quest_id, assigned_date)
+    select p_user_id, q.id, current_date
+    from public.quests q
+    where q.is_active = true
+      and not exists (
+        select 1 from public.user_quests uq
+        where uq.user_id = p_user_id and uq.quest_id = q.id and uq.assigned_date = current_date
+      )
+    order by random()
+    limit (3 - v_open)
+    on conflict (user_id, quest_id, assigned_date) do nothing;
+  end if;
 
   return query select * from public.user_quests where user_id = p_user_id and assigned_date = current_date;
 end;
@@ -593,9 +638,14 @@ $$;
 create or replace function public.record_quest_event(p_user_id uuid, p_goal_type text, p_amount integer)
 returns void
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_quest record;
 begin
+  if auth.uid() is distinct from p_user_id then
+    raise exception 'not_authorized' using errcode = '28000';
+  end if;
+
   for v_quest in
     select uq.id, uq.progress, q.goal_count, q.xp_reward, q.gem_reward
     from public.user_quests uq
@@ -646,6 +696,24 @@ alter table public.ai_usage enable row level security;
 alter table public.quests enable row level security;
 alter table public.user_quests enable row level security;
 
+alter table public.languages force row level security;
+alter table public.courses force row level security;
+alter table public.units force row level security;
+alter table public.lessons force row level security;
+alter table public.exercises force row level security;
+alter table public.exercise_attempts force row level security;
+alter table public.vocabulary force row level security;
+alter table public.profiles force row level security;
+alter table public.user_progress force row level security;
+alter table public.hearts force row level security;
+alter table public.streaks force row level security;
+alter table public.gems force row level security;
+alter table public.gem_transactions force row level security;
+alter table public.xp_transactions force row level security;
+alter table public.ai_usage force row level security;
+alter table public.quests force row level security;
+alter table public.user_quests force row level security;
+
 -- Content: public read of published/active rows, no client writes at all.
 drop policy if exists "languages readable" on public.languages;
 create policy "languages readable" on public.languages for select using (is_active = true);
@@ -689,9 +757,8 @@ drop policy if exists "profiles own rows" on public.profiles;
 create policy "profiles own rows" on public.profiles for all using (auth.uid() = id) with check (auth.uid() = id);
 
 -- Everything gamification-related: the user may only ever SELECT their own
--- row. All writes happen exclusively through the SECURITY DEFINER functions
--- above, which run with elevated privilege and therefore bypass this policy
--- by design — the client has no INSERT/UPDATE/DELETE grant on these tables.
+-- row. Writes happen through the SECURITY DEFINER functions above. Table
+-- privileges below remove direct client writes even if a policy is missing.
 drop policy if exists "exercise_attempts readable" on public.exercise_attempts;
 create policy "exercise_attempts readable" on public.exercise_attempts for select using (auth.uid() = user_id);
 revoke all on table public.exercise_attempts from public, anon, authenticated;
@@ -721,6 +788,40 @@ create policy "ai_usage readable" on public.ai_usage for select using (auth.uid(
 drop policy if exists "user_quests readable" on public.user_quests;
 create policy "user_quests readable" on public.user_quests for select using (auth.uid() = user_id);
 
+revoke all on table public.languages from public, anon, authenticated;
+revoke all on table public.courses from public, anon, authenticated;
+revoke all on table public.units from public, anon, authenticated;
+revoke all on table public.lessons from public, anon, authenticated;
+revoke all on table public.vocabulary from public, anon, authenticated;
+revoke all on table public.quests from public, anon, authenticated;
+grant select on public.languages to anon, authenticated;
+grant select on public.courses to anon, authenticated;
+grant select on public.units to anon, authenticated;
+grant select on public.lessons to anon, authenticated;
+grant select on public.vocabulary to anon, authenticated;
+grant select on public.quests to anon, authenticated;
+
+revoke all on table public.profiles from public, anon, authenticated;
+grant select (id, display_name, native_language, created_at, updated_at) on public.profiles to authenticated;
+grant update (display_name, native_language) on public.profiles to authenticated;
+
+revoke all on table public.user_progress from public, anon, authenticated;
+revoke all on table public.hearts from public, anon, authenticated;
+revoke all on table public.streaks from public, anon, authenticated;
+revoke all on table public.gems from public, anon, authenticated;
+revoke all on table public.gem_transactions from public, anon, authenticated;
+revoke all on table public.xp_transactions from public, anon, authenticated;
+revoke all on table public.ai_usage from public, anon, authenticated;
+revoke all on table public.user_quests from public, anon, authenticated;
+grant select on public.user_progress to authenticated;
+grant select on public.hearts to authenticated;
+grant select on public.streaks to authenticated;
+grant select on public.gems to authenticated;
+grant select on public.gem_transactions to authenticated;
+grant select on public.xp_transactions to authenticated;
+grant select on public.ai_usage to authenticated;
+grant select on public.user_quests to authenticated;
+
 -- ---------------------------------------------------------------------------
 -- Answer keys stay on exercises.solution. Clients may read prompts through
 -- exercises_public, never the solution column. grade_exercise compares the
@@ -740,6 +841,7 @@ grant select on public.exercises_public to anon, authenticated;
 create or replace function public.grade_exercise(p_user_id uuid, p_exercise_id uuid, p_answer text)
 returns table (correct boolean, hearts smallint)
 language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
 declare
   v_solution jsonb;
   v_expected text;
@@ -770,7 +872,11 @@ begin
     when 'string' then v_solution #>> '{}'
     else coalesce(v_solution->>'answer', '')
   end;
-  v_correct := lower(btrim(coalesce(p_answer, ''))) = lower(btrim(v_expected));
+  if p_answer is null or char_length(p_answer) > 500 then
+    v_correct := false;
+  else
+    v_correct := lower(btrim(p_answer)) = lower(btrim(v_expected));
+  end if;
 
   if not v_correct then
     select spent.count into v_hearts from public.spend_heart(p_user_id) as spent;
@@ -779,6 +885,20 @@ begin
     values (p_user_id, p_exercise_id, v_lesson_id, v_correct);
 
   return query select v_correct, coalesce(v_hearts, 0)::smallint;
+end;
+$$;
+
+create or replace function public.refund_ai_quota(p_user_id uuid)
+returns void
+language plpgsql security definer set search_path = pg_catalog, public as $$
+#variable_conflict use_column
+begin
+  if coalesce(auth.role(), '') is distinct from 'service_role' then
+    raise exception 'not_authorized' using errcode = '28000';
+  end if;
+  update public.ai_usage as usage
+    set prompts_used = greatest(0, usage.prompts_used - 1)
+    where usage.user_id = p_user_id and usage.usage_date = current_date and usage.prompts_used > 0;
 end;
 $$;
 
@@ -804,6 +924,7 @@ revoke all on function public.check_and_increment_ai_quota(uuid) from public, an
 revoke all on function public.purchase_freeze_shield(uuid) from public, anon, authenticated;
 revoke all on function public.ensure_daily_quests(uuid) from public, anon, authenticated;
 revoke all on function public.grade_exercise(uuid, uuid, text) from public, anon, authenticated;
+revoke all on function public.refund_ai_quota(uuid) from public, anon, authenticated;
 
 grant execute on function public.sync_hearts(uuid) to authenticated;
 grant execute on function public.spend_heart(uuid) to authenticated;
@@ -812,6 +933,19 @@ grant execute on function public.check_and_increment_ai_quota(uuid) to authentic
 grant execute on function public.purchase_freeze_shield(uuid) to authenticated;
 grant execute on function public.ensure_daily_quests(uuid) to authenticated;
 grant execute on function public.grade_exercise(uuid, uuid, text) to authenticated;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.refund_ai_quota(uuid) to service_role;
+  end if;
+end $$;
+
+update public.profiles set display_name = 'Learner' where btrim(display_name) = '';
+update public.profiles set display_name = left(btrim(display_name), 80) where char_length(display_name) > 80;
+alter table public.profiles drop constraint if exists profiles_display_name_length;
+alter table public.profiles
+  add constraint profiles_display_name_length check (char_length(btrim(display_name)) between 1 and 80);
 
 -- ---------------------------------------------------------------------------
 -- Seed: languages (content + gamification catalog is seeded separately once

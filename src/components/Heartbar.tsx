@@ -1,7 +1,6 @@
 import { Heart } from "lucide-react";
 import { cn } from "@/lib/cn";
-
-const MAX_HEARTS = 5;
+import { MAX_HEARTS } from "@/lib/learning-rules";
 
 export function Heartbar({ hearts, className }: { hearts: number; className?: string }) {
   const filled = Math.max(0, Math.min(MAX_HEARTS, hearts));

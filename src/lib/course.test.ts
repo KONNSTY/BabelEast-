@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { courseProgress, lessonStatuses, lessons } from "./course";
+import { canStartLesson, courseProgress, lessonStatuses, lessons } from "./course";
 
 describe("course path", () => {
   it("keeps answers out of the prompt and inside the options", () => {
@@ -16,5 +16,9 @@ describe("course path", () => {
     expect(lessonStatuses([])).toMatchObject({ greetings: "current", people: "locked", cafe: "locked", review: "locked" });
     expect(lessonStatuses(["greetings"])).toMatchObject({ greetings: "done", people: "current", cafe: "locked" });
     expect(courseProgress(["greetings", "people"])).toBe(50);
+    expect(canStartLesson([], "greetings")).toBe(true);
+    expect(canStartLesson([], "people")).toBe(false);
+    expect(canStartLesson(["greetings"], "people")).toBe(true);
+    expect(canStartLesson([], "missing")).toBe(false);
   });
 });

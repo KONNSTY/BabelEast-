@@ -1,18 +1,20 @@
 {
-  "current_milestone": "market-ready-core",
-  "completed_milestones": ["M01", "M02-schema", "refactor-core"],
-  "iteration": 2,
-  "last_commands": ["npm run lint", "npx tsc --noEmit", "npm test", "npm run build"],
+  "current_milestone": "nightly-audit",
+  "completed_milestones": ["M01", "M02-schema", "refactor-core", "nightly-audit"],
+  "iteration": 3,
+  "last_commands": ["npm run lint", "npx tsc --noEmit", "npm test", "npm run build", "npm audit"],
   "last_test_results": {
     "lint": "pass",
     "tsc": "pass",
-    "test": "14 passed",
+    "test": "25 passed",
     "build": "pass",
-    "browser": "lesson path, scoring, empty states, coach 503, and auth redirect checked against npm start"
+    "audit": "0 vulnerabilities",
+    "sql": "both migrations applied on local Postgres; grading, grants, replay, and quota checked",
+    "browser": "lesson path, scoring, empty states, coach unavailable state, and login checked against npm start"
   },
   "open_blockers": [
-    "No Supabase project or OpenRouter key in this environment, so auth, RLS, and the live coach were not exercised against real services.",
-    "001_production.sql has not been applied to a Postgres instance in this environment."
+    "No Supabase project or OpenRouter key in this environment, so live auth and the live coach were not exercised against real services.",
+    "The shipped A1 course still grades on the device. Server grading exists in the migration but is not wired into the UI."
   ],
-  "status": "core-verified"
+  "status": "audit-fixes"
 }

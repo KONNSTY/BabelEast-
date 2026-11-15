@@ -23,8 +23,13 @@ function LoginForm() {
       });
       if (error) throw error;
       setMessage("Prüfe deine E-Mails — dein sicherer Login-Link ist unterwegs.");
-    } catch {
-      setMessage("Login ist noch nicht konfiguriert. Trage zuerst deine Supabase-Variablen ein.");
+    } catch (error) {
+      const unconfigured = error instanceof Error && error.message === "Supabase ist nicht konfiguriert.";
+      setMessage(
+        unconfigured
+          ? "Login ist noch nicht konfiguriert. Trage zuerst deine Supabase-Variablen ein."
+          : "Der Login-Link konnte gerade nicht gesendet werden. Versuch es später erneut.",
+      );
     } finally {
       setLoading(false);
     }

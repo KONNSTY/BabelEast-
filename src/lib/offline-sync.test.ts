@@ -26,4 +26,14 @@ describe("offline sync queue", () => {
     const second = await flushSyncQueue(async () => undefined);
     expect(second).toEqual({ sent: 1, pending: 0 });
   });
+
+  it("drops the oldest events once the queue is full", async () => {
+    for (let index = 0; index < 51; index += 1) {
+      await queueSyncEvent({ kind: "answer", payload: { index } });
+    }
+    const result = await flushSyncQueue(async () => {
+      throw new Error("keep");
+    });
+    expect(result).toEqual({ sent: 0, pending: 50 });
+  });
 });

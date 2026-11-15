@@ -59,8 +59,12 @@ export function useVoicePipeline(locale: string) {
     };
     recognition.current = instance;
     setTranscript("");
-    setListening(true);
-    instance.start();
+    try {
+      instance.start();
+      setListening(true);
+    } catch {
+      setListening(false);
+    }
   }, [locale]);
 
   const speak = useCallback(

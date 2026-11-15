@@ -47,4 +47,11 @@ describe("learning store", () => {
     expect(useLearningStore.getState().completedLessonIds).toEqual([]);
     expect(useLearningStore.getState().streak).toBe(0);
   });
+
+  it("ignores a non-numeric coach reward", () => {
+    useLearningStore.getState().awardCoachXp(Number.NaN);
+    expect(useLearningStore.getState().xp).toBe(0);
+    useLearningStore.getState().awardCoachXp(5);
+    expect(useLearningStore.getState().xp).toBe(5);
+  });
 });

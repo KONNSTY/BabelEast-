@@ -1,4 +1,54 @@
+import { z } from "zod";
+import { sameOriginRequest } from "@/lib/http";
+
 const COACH_XP = 5;
+const MAX_COACH_BODY_CHARS = 8_000;
+
+export const coachRequestSchema = z.object({
+  message: z.string().trim().min(1).max(1200),
+  targetLanguage: z.string().regex(/^[a-z]{2}$/).default("de"),
+  context: z.string().max(2000).optional(),
+});
+
+export const coachModelSchema = z.object({
+  correction: z.string().max(500).nullable(),
+  explanation: z.string().max(2000),
+  reply: z.string().min(1).max(2000),
+  suggested_replies: z.array(z.string().max(240)).max(4),
+});
+
+export type CoachRequest = z.infer<typeof coachRequestSchema>;
+
+export function coachMode(options: { supabaseConfigured: boolean; nodeEnv: string | undefined }): "offline" | "unavailable" | "live" {
+  if (options.supabaseConfigured) return "live";
+  return options.nodeEnv === "production" ? "unavailable" : "offline";
+}
+
+export async function readCoachRequest(
+  request: Request,
+): Promise<{ ok: true; data: CoachRequest } | { ok: false; status: number; error: string }> {
+  if (!sameOriginRequest(request)) {
+    return { ok: false, status: 403, error: "Anfrage abgelehnt." };
+  }
+  let raw: string;
+  try {
+    raw = await request.text();
+  } catch {
+    return { ok: false, status: 400, error: "Ungültige Eingabe." };
+  }
+  if (raw.length > MAX_COACH_BODY_CHARS) {
+    return { ok: false, status: 413, error: "Anfrage ist zu groß." };
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return { ok: false, status: 400, error: "Ungültige Eingabe." };
+  }
+  const parsed = coachRequestSchema.safeParse(body);
+  if (!parsed.success) return { ok: false, status: 400, error: "Ungültige Eingabe." };
+  return { ok: true, data: parsed.data };
+}
 
 export type CoachReply = {
   correction: string | null;

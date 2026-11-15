@@ -50,6 +50,8 @@ describe("learning rules", () => {
 
     const partial = regenHearts({ hearts: 1, lastRegenAt: new Date(NOW - HEART_REGEN_MS).toISOString() }, NOW);
     expect(partial.hearts).toBe(2);
+    expect(regenHearts({ hearts: Number.NaN, lastRegenAt: "not-a-date" }, NOW).hearts).toBe(MAX_HEARTS);
+    expect(regenHearts({ hearts: 2, lastRegenAt: "not-a-date" }, NOW)).toEqual({ hearts: 2, lastRegenAt: "not-a-date" });
   });
 
   it("scores a lesson and pays full XP once, then a reduced replay on a later day", () => {
@@ -60,6 +62,7 @@ describe("learning rules", () => {
     expect(lessonXp(40, 100, "first")).toBe(40);
     expect(lessonXp(40, 100, "replay-today")).toBe(0);
     expect(lessonXp(40, 100, "replay")).toBe(10);
+    expect(lessonXp(-10, 100, "first")).toBe(0);
   });
 
   it("increments a streak once per day and resets after a gap", () => {
